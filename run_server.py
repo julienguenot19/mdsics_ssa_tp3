@@ -1,39 +1,50 @@
 # -*- coding: utf-8 -*-
 """
-Serveur Flask sécurisé avec Authentification Basic et Base de Données SQLite
+Serveur Flask sécurisé avec Authentification Basic, SQLite et Bcrypt
 """
 
 from functools import wraps
 from flask import Flask, request, Response
 import os
 import sqlite3
-import hashlib
+import bcrypt
 
 # --- CONFIGURATION ---
-SECRET_MESSAGE = "diplodocus"
-
-# Configuration SSL (dossier et nom de fichier)
+SECRET_MESSAGE = "parasaurolophus"
 SSL_CONTEXT = "ssl/"
 SSL_DOMAIN = "localhost+1"
-
-# Nom de la base de données locale
 DB_NAME = "users.db"
 
 app = Flask(__name__)
 
-# --- GESTION DE LA BASE DE DONNÉES (SQLite) ---
+# --- SÉCURITÉ (BCRYPT) ---
 
 def hash_password(password):
-    """Hache le mot de passe (SHA-256) pour ne pas le stocker en clair."""
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    """
+    Hache le mot de passe avec un sel (salt) aléatoire via Bcrypt.
+    Retourne une chaîne de caractères (string) prête à être stockée.
+    """
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed.decode('utf-8')
+
+def verify_password(plain_password, stored_hash):
+    """
+    Vérifie si le mot de passe en clair correspond au hash stocké.
+    """
+    pwd_bytes = plain_password.encode('utf-8')
+    hash_bytes = stored_hash.encode('utf-8')
+    
+    return bcrypt.checkpw(pwd_bytes, hash_bytes)
+
+# --- BASE DE DONNÉES ---
 
 def init_db():
-    """Crée la table et ajoute un utilisateur admin si la base est vide."""
-    # Connexion (crée le fichier s'il n'existe pas)
+    """Initialise la base de données avec des utilisateurs par défaut."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
-    # Création de la table 'users'
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -41,45 +52,45 @@ def init_db():
         )
     ''')
     
+    # Si la table est vide, on ajoute l'admin par défaut
     cursor.execute('SELECT count(*) FROM users')
     if cursor.fetchone()[0] == 0:
-        print("--- Initialisation de la Base de Données ---")
-        # Ajout de l'utilisateur par défaut : admin / adminpass
+        print("--- Initialisation de la Base de Données (Bcrypt) ---")
+        
+        # Création du hash pour 'adminpass'
         pwd_hash = hash_password("adminpass")
+        
         cursor.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', ("admin", pwd_hash))
         conn.commit()
-        print("Utilisateur 'admin' créé avec le mot de passe 'adminpass'.")
+        print(f"Utilisateur 'admin' créé (Hash: {pwd_hash[:15]}...)")
     
     conn.close()
 
-# --- SÉCURITÉ & AUTHENTIFICATION ---
+# --- AUTHENTIFICATION HTTP ---
 
 def check_auth(username, password):
-    """Vérifie le login/mot de passe dans la base de données."""
+    """Récupère le hash en DB et le vérifie avec bcrypt."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
-    # Récupération du hash stocké pour cet utilisateur
     cursor.execute('SELECT password_hash FROM users WHERE username = ?', (username,))
     row = cursor.fetchone()
     conn.close()
     
     if row:
         stored_hash = row[0]
-        # On compare le hash du mot de passe saisi avec celui stocké
-        return stored_hash == hash_password(password)
+        # Utilisation de la fonction de vérification bcrypt
+        return verify_password(password, stored_hash)
     
     return False
 
 def authenticate():
-    """Envoie une réponse 401 pour déclencher la fenêtre de connexion du navigateur."""
     return Response(
         'Connexion requise.\n'
         'Veuillez entrer un identifiant et un mot de passe valides.', 401,
-        {'WWW-Authenticate': 'Basic realm="Accès Sécurisé"'})
+        {'WWW-Authenticate': 'Basic realm="Accès Sécurisé Bcrypt"'})
 
 def requires_auth(f):
-    """Décorateur pour protéger les routes Flask."""
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
@@ -91,34 +102,24 @@ def requires_auth(f):
 # --- ROUTES ---
 
 @app.route("/")
-@requires_auth  # <-- Protection activée ici
+@requires_auth
 def get_secret_message():
     user = request.authorization.username
-    return f"Bonjour {user} ! Le mot de passe est : {SECRET_MESSAGE}"
+    return f"Bonjour {user} ! Authentification réussie. Secret : {SECRET_MESSAGE}"
 
 
 if __name__ == "__main__":
-    print("--- Démarrage du Serveur ---")
+    print("--- Démarrage du Serveur Sécurisé ---")
     
-    # 1. Initialiser la DB (crée le fichier users.db si absent)
-    #init_db()
+    # Initialisation de la DB
+    init_db()
     
-    # 2. Vérification des certificats SSL
-    cert_file = SSL_CONTEXT + SSL_DOMAIN + ".pem"
-    key_file = SSL_CONTEXT + SSL_DOMAIN + "-key.pem"
+    # Configuration SSL
+    cert_file = os.path.join(SSL_CONTEXT, f"{SSL_DOMAIN}.pem")
+    key_file = os.path.join(SSL_CONTEXT, f"{SSL_DOMAIN}-key.pem")
 
-    # HTTP version (commentée par défaut)
-    # app.run(debug=True, host="0.0.0.0", port=8081)
-
-    # HTTPS version
     if os.path.exists(cert_file) and os.path.exists(key_file):
-        print(f"Certificats trouvés. Accès via https://localhost:8081")
-        app.run(
-            debug=True, 
-            host="0.0.0.0", 
-            port=8081, 
-            ssl_context=(cert_file, key_file)
-        )
+        print(f"SSL OK. Accès via https://localhost:8081")
+        app.run(debug=True, host="0.0.0.0", port=8081, ssl_context=(cert_file, key_file))
     else:
-        print(f"[ERREUR] Fichiers SSL introuvables : {cert_file}")
-        print("Veuillez générer les certificats ou vérifier le chemin.")
+        print(f"[ERREUR] Certificats non trouvés dans {SSL_CONTEXT}")
