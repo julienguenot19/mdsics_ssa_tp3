@@ -24,19 +24,30 @@ def hash_password(password):
     Hache le mot de passe avec un sel (salt) aléatoire via Bcrypt.
     Retourne une chaîne de caractères (string) prête à être stockée.
     """
+    # bcrypt travaille avec des bytes, on encode donc le password
     pwd_bytes = password.encode('utf-8')
+    # On génère le sel et on hache
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(pwd_bytes, salt)
+    # On retourne le hash en format string pour la base de données
     return hashed.decode('utf-8')
 
 def verify_password(plain_password, stored_hash):
     """
     Vérifie si le mot de passe en clair correspond au hash stocké.
     """
+    # On a besoin de bytes pour bcrypt
     pwd_bytes = plain_password.encode('utf-8')
     hash_bytes = stored_hash.encode('utf-8')
     
-    return bcrypt.checkpw(pwd_bytes, hash_bytes)
+    # checkpw compare le mot de passe et le hash (qui contient le sel)
+    try:
+        return bcrypt.checkpw(pwd_bytes, hash_bytes)
+    except ValueError:
+        # Cette erreur survient si la base de données contient d'anciens formats de hash
+        print(f"\n[ERREUR SECURITE] Le mot de passe stocké n'est pas un hash Bcrypt valide.")
+        print(f"Action requise : Veuillez SUPPRIMER le fichier '{DB_NAME}' et relancer le serveur.\n")
+        return False
 
 # --- BASE DE DONNÉES ---
 
@@ -99,13 +110,12 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- ROUTES ---
 
 @app.route("/")
 @requires_auth
 def get_secret_message():
     user = request.authorization.username
-    return f"Bonjour {user} ! Authentification réussie. Secret : {SECRET_MESSAGE}"
+    return f"Bonjour {user} ! Authentification forte (Bcrypt) réussie. Secret : {SECRET_MESSAGE}"
 
 
 if __name__ == "__main__":
